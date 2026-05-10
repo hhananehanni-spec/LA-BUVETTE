@@ -1,3 +1,4 @@
+import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -151,6 +152,7 @@ function SpotRow({ spot, last }: { spot: Spot; last: boolean }) {
     <TouchableOpacity
       style={[s.spot, !last && s.spotBorder]}
       activeOpacity={0.7}
+      onPress={() => router.push({ pathname: '/spot/[id]', params: { id: spot.id, rank: spot.rank } })}
     >
       <RankNum rank={spot.rank} featured={isTop} />
       <View style={s.spotInfo}>
