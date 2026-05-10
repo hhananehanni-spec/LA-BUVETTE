@@ -1,19 +1,93 @@
-import { useState } from 'react';
-import { ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Kicker } from '../../components/ui/Kicker';
 import { Pill } from '../../components/ui/Pill';
 import { RankNum } from '../../components/ui/RankNum';
-import { ARR_FILTERS, MOCK_SPOTS, type Spot } from '../../mock/spots';
+import { supabase } from '../../lib/supabase';
 import { colors } from '../../theme/tokens';
 
-export default function TrendingScreen() {
-  const [activeFilter, setActiveFilter] = useState<string>('Tous');
+// Filtres affichés dans la barre de pills
+const FILTERS = ['Tous', '9e', '18e'] as const;
+type Filter = typeof FILTERS[number];
 
-  const spots =
+// Type qui correspond à une ligne de la table "spots" dans Supabase
+interface Spot {
+  id: string;
+  name: string;
+  arrondissement: number;
+  type: string;
+  like_count: number;  // calculé par la requête
+  trend: number;       // placeholder jusqu'au calcul réel
+  rank: number;        // position dans le classement
+}
+
+export default function TrendingScreen() {
+  const [spots, setSpots] = useState<Spot[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [activeFilter, setActiveFilter] = useState<Filter>('Tous');
+
+  useEffect(() => {
+    fetchSpots();
+  }, []);
+
+  async function fetchSpots() {
+    setLoading(true);
+    setError(null);
+
+    /**
+     * On joint la table spots avec les votes pour compter les likes.
+     * select('*, votes(count)') demande à Supabase de compter les votes
+     * associés à chaque spot en une seule requête.
+     */
+    const { data, error } = await supabase
+      .from('spots')
+      .select(`
+        id,
+        name,
+        arrondissement,
+        type,
+        votes(count)
+      `)
+      .order('name');
+
+    if (error) {
+      setError('Impossible de charger les spots.');
+      setLoading(false);
+      return;
+    }
+
+    // On transforme les données Supabase dans le format attendu par l'UI
+    const formatted: Spot[] = (data ?? []).map((row, i) => ({
+      id: row.id,
+      name: row.name,
+      arrondissement: row.arrondissement,
+      type: row.type ?? '',
+      like_count: (row.votes as any)?.[0]?.count ?? 0,
+      trend: 0,  // sera calculé côté Supabase dans un sprint futur
+      rank: i + 1,
+    }));
+
+    // Trie par nombre de likes décroissant et assigne les rangs
+    formatted.sort((a, b) => b.like_count - a.like_count);
+    formatted.forEach((s, i) => (s.rank = i + 1));
+
+    setSpots(formatted);
+    setLoading(false);
+  }
+
+  const filtered =
     activeFilter === 'Tous'
-      ? MOCK_SPOTS
-      : MOCK_SPOTS.filter((s) => s.arrondissement === parseInt(activeFilter));
+      ? spots
+      : spots.filter((s) => s.arrondissement === parseInt(activeFilter, 10));
 
   return (
     <SafeAreaView style={s.root} edges={['top']}>
@@ -27,13 +101,13 @@ export default function TrendingScreen() {
         </View>
       </View>
 
-      {/* ── Arrondissement filters ── */}
+      {/* ── Filtres arrondissement ── */}
       <ScrollView
         horizontal
         showsHorizontalScrollIndicator={false}
         contentContainerStyle={s.filters}
       >
-        {ARR_FILTERS.map((f) => (
+        {FILTERS.map((f) => (
           <Pill
             key={f}
             label={f}
@@ -46,20 +120,32 @@ export default function TrendingScreen() {
       {/* ── Kicker ── */}
       <Kicker left="Trending — semaine 19" right="↗ Paris" />
 
-      {/* ── Ranking list ── */}
-      <ScrollView style={s.list} showsVerticalScrollIndicator={false}>
-        {spots.map((spot, i) => (
-          <SpotRow key={spot.id} spot={spot} last={i === spots.length - 1} />
-        ))}
-        <View style={s.listBottom} />
-      </ScrollView>
+      {/* ── Contenu ── */}
+      {loading ? (
+        <View style={s.center}>
+          <ActivityIndicator color={colors.rouille} />
+        </View>
+      ) : error ? (
+        <View style={s.center}>
+          <Text style={s.errorText}>{error}</Text>
+          <TouchableOpacity onPress={fetchSpots} style={s.retry}>
+            <Text style={s.retryText}>Réessayer</Text>
+          </TouchableOpacity>
+        </View>
+      ) : (
+        <ScrollView style={s.list} showsVerticalScrollIndicator={false}>
+          {filtered.map((spot, i) => (
+            <SpotRow key={spot.id} spot={spot} last={i === filtered.length - 1} />
+          ))}
+          <View style={s.listBottom} />
+        </ScrollView>
+      )}
     </SafeAreaView>
   );
 }
 
 function SpotRow({ spot, last }: { spot: Spot; last: boolean }) {
   const isTop = spot.rank === 1;
-  const isUp = spot.trend > 0;
 
   return (
     <TouchableOpacity
@@ -74,12 +160,8 @@ function SpotRow({ spot, last }: { spot: Spot; last: boolean }) {
         </Text>
         <View style={s.stats}>
           <Text style={s.likes}>
-            <Text style={s.heart}>♥</Text>
-            {' '}
-            {spot.likes.toLocaleString('fr-FR')}
-          </Text>
-          <Text style={[s.trend, isUp ? s.trendUp : s.trendDown]}>
-            {isUp ? `↑ ${spot.trend}` : `↓ ${Math.abs(spot.trend)}`}
+            <Text style={s.heart}>♥</Text>{' '}
+            {spot.like_count.toLocaleString('fr-FR')}
           </Text>
         </View>
       </View>
@@ -88,19 +170,15 @@ function SpotRow({ spot, last }: { spot: Spot; last: boolean }) {
 }
 
 const s = StyleSheet.create({
-  root: {
-    flex: 1,
-    backgroundColor: colors.cream,
-  },
+  root: { flex: 1, backgroundColor: colors.cream },
 
-  /* nav */
   nav: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     paddingHorizontal: 22,
     paddingTop: 8,
-    paddingBottom: 14,
+    paddingBottom: 10,
   },
   logo: {
     fontFamily: 'Georgia',
@@ -109,85 +187,45 @@ const s = StyleSheet.create({
     letterSpacing: -0.5,
     color: colors.ink,
   },
-  dot: {
-    color: colors.rouille,
-  },
+  dot: { color: colors.rouille },
   iconBtn: {
-    width: 30,
-    height: 30,
-    borderWidth: 1,
-    borderColor: colors.ink,
+    width: 30, height: 30,
+    borderWidth: 1, borderColor: colors.ink,
     borderRadius: 15,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: 'center', justifyContent: 'center',
   },
-  burger: {
-    fontSize: 13,
-    color: colors.ink,
-  },
+  burger: { fontSize: 13, color: colors.ink },
 
-  /* filters */
   filters: {
     flexDirection: 'row',
+    alignItems: 'center',
     gap: 6,
     paddingHorizontal: 22,
-    paddingBottom: 14,
+    paddingBottom: 8,
   },
 
-  /* list */
-  list: {
-    flex: 1,
-    paddingHorizontal: 22,
+  center: {
+    flex: 1, alignItems: 'center', justifyContent: 'center', gap: 12,
   },
-  listBottom: {
-    height: 24,
+  errorText: { fontSize: 13, color: colors.gray1, textAlign: 'center' },
+  retry: {
+    borderWidth: 1, borderColor: colors.ink,
+    borderRadius: 100, paddingHorizontal: 20, paddingVertical: 8,
   },
+  retryText: { fontSize: 12, color: colors.ink },
 
-  /* spot row */
-  spot: {
-    flexDirection: 'row',
-    gap: 14,
-    paddingVertical: 14,
-  },
-  spotBorder: {
-    borderBottomWidth: 1,
-    borderBottomColor: colors.line,
-  },
-  spotInfo: {
-    flex: 1,
-  },
+  list: { flex: 1, paddingHorizontal: 22 },
+  listBottom: { height: 24 },
+
+  spot: { flexDirection: 'row', gap: 14, paddingVertical: 14 },
+  spotBorder: { borderBottomWidth: 1, borderBottomColor: colors.line },
+  spotInfo: { flex: 1 },
   spotName: {
-    fontFamily: 'Georgia',
-    fontWeight: '700',
-    fontSize: 16,
-    color: colors.ink,
-    marginBottom: 2,
+    fontFamily: 'Georgia', fontWeight: '700',
+    fontSize: 16, color: colors.ink, marginBottom: 2,
   },
-  spotMeta: {
-    fontSize: 11,
-    color: colors.gray1,
-    marginBottom: 6,
-  },
-  stats: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  likes: {
-    fontSize: 11,
-    color: colors.ink,
-  },
-  heart: {
-    color: colors.rouille,
-  },
-  trend: {
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  trendUp: {
-    color: colors.rouille,
-  },
-  trendDown: {
-    color: colors.gray1,
-  },
+  spotMeta: { fontSize: 11, color: colors.gray1, marginBottom: 6 },
+  stats: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  likes: { fontSize: 11, color: colors.ink },
+  heart: { color: colors.rouille },
 });
