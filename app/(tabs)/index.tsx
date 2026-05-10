@@ -79,7 +79,12 @@ export default function TrendingScreen() {
 
     // Trie par nombre de likes décroissant et assigne les rangs
     formatted.sort((a, b) => b.like_count - a.like_count);
-    formatted.forEach((s, i) => (s.rank = i + 1));
+    const total = formatted.length;
+    formatted.forEach((s, i) => {
+      s.rank = i + 1;
+      // ↑ pour les 2 premiers (chauds), ↓ pour les 2 derniers, 0 sinon
+      s.trend = s.rank <= 2 ? 1 : s.rank >= total - 1 ? -1 : 0;
+    });
 
     setSpots(formatted);
     setLoading(false);
@@ -165,6 +170,11 @@ function SpotRow({ spot, last }: { spot: Spot; last: boolean }) {
             <Text style={s.heart}>♥</Text>{' '}
             {spot.like_count.toLocaleString('fr-FR')}
           </Text>
+          {spot.trend !== 0 && (
+            <Text style={[s.trendArrow, spot.trend > 0 ? s.trendUp : s.trendDown]}>
+              {spot.trend > 0 ? '↑' : '↓'}
+            </Text>
+          )}
         </View>
       </View>
     </TouchableOpacity>
@@ -230,4 +240,7 @@ const s = StyleSheet.create({
   stats: { flexDirection: 'row', alignItems: 'center', gap: 12 },
   likes: { fontSize: 11, color: colors.ink },
   heart: { color: colors.rouille },
+  trendArrow: { fontSize: 12, fontWeight: '700' },
+  trendUp: { color: colors.rouille },
+  trendDown: { color: colors.gray2 },
 });
